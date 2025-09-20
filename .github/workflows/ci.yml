@@ -60,4 +60,23 @@ jobs:
           print('Smoke imports OK')
           PY
 
+      - name: Outbox smoke test (read directories)
+        env:
+          OUTBOX_ROOT: ${{ github.workspace }}/.outbox_smoke
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from config.paths_config import ProjectPaths
+          os.makedirs(os.environ['OUTBOX_ROOT'], exist_ok=True)
+          # Prüfen, dass erwartete Pfade korrekt aufgelöst werden (kein Schreibbedarf)
+          paths = [
+            ProjectPaths.outbox_churn_experiment_directory(1),
+            ProjectPaths.outbox_cox_experiment_directory(1),
+            ProjectPaths.outbox_counterfactuals_directory() / 'experiment_1',
+          ]
+          for p in paths:
+            print(f'Resolved: {p}')
+          PY
+
 
