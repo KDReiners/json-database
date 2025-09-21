@@ -7,7 +7,7 @@ module_info:
   status: "PRODUCTION"
   integration_level: "CORE_INFRASTRUCTURE"
   performance_target: "< 2s complex queries"
-  last_updated: "2025-09-18"
+  last_updated: "2025-09-21"
   ai_agent_optimized: true
 ```
 
@@ -46,71 +46,42 @@ core_tables:
   files: "File metadata and hash tracking"
   rawdata: "Stage0 raw data cache"
   experiments: "Experiment definitions and status tracking"
-  
-churn_tables:
-  customer_churn_details: "4,742 customers with churn predictions"
-  backtest_results: "Churn model performance and predictions"
-  enhanced_early_warning_results: "Detailed churn analysis results"
-  
-cox_tables:
-  customer_cox_details: "6,287 customers with survival analysis"
-  cox_survival: "Customer-level survival data and probabilities"
-  cox_prioritization_results: "Risk scoring and prioritization"
-  cox_analysis_metrics: "Cox model performance metrics"
-  
-counterfactuals_tables:
-  cf_individual: "Individual customer counterfactual recommendations"
-  cf_aggregate: "Aggregated feature impact analysis"
-  cf_business_metrics: "ROI and cost-benefit analysis"
-  cf_feature_recommendations: "Actionable feature recommendations"
-  
-integration_tables:
-  experiment_kpis: "Cross-system performance metrics"
-  feature_importance: "Global feature importance tracking"
-  system_health: "Database integrity and performance monitoring"
 ```
 
-## 🚀 **QUICK START FOR AI-AGENTS**
+## 🚀 **QUICK START**
 
-### **Basic Usage:**
+### **End-to-End Ingestion → rawdata (Union)**
 ```bash
-# Environment setup
-source churn_prediction_env/bin/activate
-cd /Users/klaus.reiners/Projekte/Cursor\ ChurnPrediction\ -\ Reengineering
-
-# Direct SQL queries
-python bl/json_database/query_churn_database.py "SELECT * FROM experiments ORDER BY experiment_id DESC LIMIT 5"
-
-# Interactive SQL session
-python bl/json_database/query_churn_database.py
-
-# Management Studio (Web UI)
-python UI/managementstudio/app.py
+# 1) CSV→Stage0→Outbox (über bl-input) + 2) Outbox→rawdata (Union, replace) in einem Schritt
+make -C bl-workspace ingest
 ```
 
-### **Programmatic API:**
+### **Programmatic API (Union-Import aus Outbox):**
 ```python
 from bl.json_database.churn_json_database import ChurnJSONDatabase
-from bl.json_database.sql_query_interface import SQLQueryInterface
 
-# Database operations
 db = ChurnJSONDatabase()
-churn_customers = db.get_customer_churn_details()
-cox_customers = db.get_customer_cox_details()
-
-# SQL queries
-qi = SQLQueryInterface()
-results = qi.execute_query("SELECT * FROM Churn_Cox_Fusion LIMIT 10")
-performance = qi.execute_query("SELECT * FROM cox_performance_summary")
+added = db.import_from_outbox_stage0_union(replace=True)
+db.save()
+print(f"Imported rows: {added}")
 ```
 
 ## 📊 **CONFIGURATION & SCHEMA**
+
+### **Type System (Data Dictionary ist Quelle der Wahrheit)**
+- Typregeln (wirksam ab Stage0, keine Laufzeit-Casts erzwungen):
+  - `Kunde`: INTEGER
+  - `i_*`: INTEGER, Ausnahme `i_Alive`: BOOLEAN
+  - `I_TIMEBASE`: INTEGER (Format YYYYMM)
+  - `n_*`: DOUBLE (float)
+- Datei: `json-database/config/shared/config/data_dictionary_optimized.json`
+- Das SQL-Interface validiert Typen optional, erzwingt aber keine Konvertierung (kein „hard cast“).
 
 ### **Key Configuration:**
 ```yaml
 database_file: "dynamic_system_outputs/churn_database.json"
 backup_strategy: "Automatic backup before major operations"
-schema_validation: "Strict type checking and referential integrity"
+schema_validation: "Type validation based on Data Dictionary"
 performance_optimization: "In-memory DuckDB with columnar storage"
 
 connection_settings:
@@ -140,10 +111,10 @@ utility_functions:
 ### **Data Flow:**
 ```yaml
 input_sources:
+  - "Stage0 cache → rawdata table (via Outbox union import)"
   - "Churn pipeline → customer_churn_details, backtest_results"
   - "Cox pipeline → customer_cox_details, cox_survival"
   - "Counterfactuals → cf_* tables"
-  - "Stage0 cache → rawdata table"
   
 output_interfaces:
   - "DuckDB SQL queries → Business intelligence"
@@ -340,9 +311,13 @@ recovery_procedure:
   4. "Validate data integrity"
 ```
 
+## 🧪 **VALIDATION**
+- Interaktiv: `python bl/json_database/query_churn_database.py`, dann `\tables`, `\describe rawdata`, `\raw_profile`.
+- DuckDB-Checks: `SELECT typeof(Kunde), typeof(I_TIMEBASE), typeof(I_Alive) FROM rawdata LIMIT 1;` (nur Ansicht, keine Datentypänderung).
+
 ---
 
-**📅 Last Updated:** 2025-09-18  
+**📅 Last Updated:** 2025-09-21  
 **🤖 Optimized for:** AI-Agent maintenance and usage  
 **🎯 Status:** Production-ready core infrastructure  
 **🔗 Related:** docs/SQL_QUERY_INTERFACE_GUIDE.md, docs/CHURN_DATABASE_SCHEMA.md

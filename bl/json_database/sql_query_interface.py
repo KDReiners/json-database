@@ -37,8 +37,8 @@ class SQLQueryInterface:
         self.db = ChurnJSONDatabase()
         self.history = []
         self._data_dictionary = self._load_data_dictionary()
-        # Strict Type Mode: Nur Data Dictionary ist Quelle der Wahrheit
-        self.strict_types = True
+        # Typen aus Data Dictionary nur validieren, nicht erzwingen (kein hartes Casting)
+        self.strict_types = False
     
     def _load_data_dictionary(self) -> Dict[str, Any]:
         """Lädt das Data Dictionary aus der Konfiguration."""
@@ -73,6 +73,9 @@ class SQLQueryInterface:
             dd_info = dd_cols.get(col)
             if isinstance(dd_info, dict) and "data_type" in dd_info:
                 dtype_map[col] = self._infer_pandas_dtype(dd_info.get("data_type"))
+        # Wunsch: Keine Laufzeit-Casts, nur Validierung (Typen am Anfang bestimmen)
+        if not self.strict_types:
+            return df
         # Keine Heuristiken im Strict Mode
         # Casting anwenden robust
         for col, pd_type in dtype_map.items():
@@ -80,7 +83,8 @@ class SQLQueryInterface:
                 continue
             try:
                 if pd_type in ("float64",):
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                    # Erzwinge float64 explizit (pd.to_numeric behält sonst int64 bei)
+                    df[col] = pd.to_numeric(df[col], errors="coerce").astype("float64")
                 elif pd_type == "Int64":
                     df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
                 elif pd_type in ("boolean", "bool"):
@@ -834,6 +838,44 @@ ORDER BY p.Kunde;
         
         return table + stats
     
+    def profile_rawdata(self) -> List[Dict[str, Any]]:
+        """
+        Erstellt ein einfaches Spaltenprofil der Tabelle 'rawdata': Spaltenname, Nicht-Null-Zähler,
+        Gesamtzeilen, Missing-Quote, abgeleiteter Pandas-Datentyp.
+        """
+        try:
+            tbl = self.db.data.get("tables", {}).get("rawdata", {})
+            records = tbl.get("records", []) or []
+            if not records:
+                return []
+            import pandas as pd  # type: ignore
+            df = pd.DataFrame(records)
+            # 'features' ist JSON – nicht mitprofilieren
+            if "features" in df.columns:
+                try:
+                    df = df.drop(columns=["features"])
+                except Exception:
+                    pass
+            total = len(df)
+            out: List[Dict[str, Any]] = []
+            for col in df.columns:
+                non_null = int(df[col].notna().sum())
+                missing = total - non_null
+                missing_rate = round((missing / total) * 100.0, 2) if total > 0 else 0.0
+                out.append({
+                    "column": col,
+                    "non_null": non_null,
+                    "rows": total,
+                    "missing_%": missing_rate,
+                    "dtype": str(df[col].dtype)
+                })
+            # Sortiere: erst systematische Felder nach vorne
+            priority = {"Kunde": 0, "I_TIMEBASE": 1, "id_files": 2, "dt_inserted": 3}
+            out.sort(key=lambda r: (priority.get(str(r.get("column")), 9999), str(r.get("column"))))
+            return out
+        except Exception:
+            return []
+    
     def show_tables(self) -> str:
         """Zeigt alle verfügbaren Tabellen"""
         tables = list(self.db.data["tables"].keys())
@@ -970,6 +1012,10 @@ def interactive_query_session():
             elif query.lower().startswith("\\describe "):
                 table_name = query[10:].strip()
                 print(interface.describe_table(table_name))
+                continue
+            elif query.lower() == "\\raw_profile":
+                prof = interface.profile_rawdata()
+                print(interface._format_as_table(prof))
                 continue
             elif query.lower().startswith("\\pivot_case "):
                 # Syntax: \pivot_case <target_yyyymm> [--years N] [--month MM] [--scope same-file|all] [--threshold optimal|std05|f1|precision|recall] [--base churned|all] [--save-table NAME]

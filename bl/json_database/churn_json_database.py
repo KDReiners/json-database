@@ -360,8 +360,6 @@ class ChurnJSONDatabase:
                         if column_name not in ["Kunde"]:  # Kunde schon gesetzt
                             rawdata_record[column_name] = value
                     
-                    # Zusätzlich: Komplette Zeile weiterhin unter 'features' für Backward-Kompatibilität
-                    rawdata_record["features"] = customer_data
                     customers.append(rawdata_record)
                     record_id += 1
 
@@ -465,8 +463,6 @@ class ChurnJSONDatabase:
                     if column_name not in ["Kunde"]:  # Kunde schon gesetzt
                         rawdata_record[column_name] = value
                 
-                # Zusätzlich: Komplette Zeile weiterhin unter 'features' für Backward-Kompatibilität
-                rawdata_record["features"] = customer_data
                 existing_records.append(rawdata_record)
                 existing_keys.add(key)
                 key_to_record[key] = rawdata_record
@@ -622,8 +618,6 @@ class ChurnJSONDatabase:
             if column_name not in ["Kunde"]:  # Kunde schon gesetzt
                 rawdata_record[column_name] = value
         
-        # Zusätzlich: Komplette Zeile weiterhin unter 'features' für Backward-Kompatibilität
-        rawdata_record["features"] = customer_data
         
         return rawdata_record
 
@@ -1101,6 +1095,85 @@ class ChurnJSONDatabase:
             print(f"❌ Fehler beim Cox-Outbox-Import: {e}")
             return False
     
+    def import_from_outbox_stage0_union(self, replace: bool = True) -> int:
+        """
+        Liest alle Stage0-JSONs aus der Outbox (outbox/stage0_cache/*.json) und
+        materialisiert sie als Union in die Tabelle 'rawdata'.
+
+        - Alle Originalspalten werden als Top-Level-Felder übernommen (Union über Dateien)
+        - Jede Zeile enthält eine Lineage-Referenz 'id_files' auf den zugehörigen File-Record
+        - Optional: ersetzt bestehende 'rawdata' (replace=True), sonst appendet an bestehende
+
+        Returns:
+            Anzahl der neu geschriebenen Records (nur die dieser Operation hinzugefügten)
+        """
+        try:
+            base_dir = ProjectPaths.outbox_directory() / "stage0_cache"
+            if not base_dir.exists():
+                print(f"ℹ️ Outbox Stage0-Verzeichnis nicht gefunden: {base_dir}")
+                return 0
+
+            # files-Index: vorhandene Stage0-File-IDs nach file_name auflösen
+            files_tbl = self.data.get("tables", {}).get("files", {}).get("records", []) or []
+            existing_by_name: Dict[str, int] = {}
+            for rec in files_tbl:
+                try:
+                    if (rec.get("source_type") or "").lower() != "stage0_cache":
+                        continue
+                    name = rec.get("file_name")
+                    if not name:
+                        continue
+                    existing_by_name[name] = int(rec.get("id"))
+                except Exception:
+                    continue
+
+            # Ziel-Tabelle vorbereiten
+            raw_tbl = self.data["tables"].setdefault("rawdata", {"records": []})
+            if replace:
+                target_records: List[Dict[str, Any]] = []
+                next_id: int = 1
+            else:
+                target_records = raw_tbl.get("records", []) or []
+                next_id = max([int(r.get("id", 0)) for r in target_records] or [0]) + 1
+
+            added_total = 0
+            file_ids_used: List[int] = []
+
+            # Alle Outbox-Stage0-Dateien verarbeiten
+            for p in sorted(base_dir.glob("*.json")):
+                name = p.name
+                # File-ID wiederverwenden oder neu anlegen
+                if name in existing_by_name:
+                    fid = existing_by_name[name]
+                else:
+                    fid = self.create_file_record(file_name=name, source_type="stage0_cache")
+                    existing_by_name[name] = fid
+                try:
+                    recs = self._extract_stage0_records(str(p))
+                except Exception:
+                    recs = None
+                if not recs:
+                    continue
+                for r in recs:
+                    if not isinstance(r, dict):
+                        continue
+                    new_rec = self._transform_stage0_to_raw(r, fid, next_id)
+                    target_records.append(new_rec)
+                    next_id += 1
+                    added_total += 1
+                file_ids_used.append(int(fid))
+
+            # Persistieren
+            self.data["tables"].setdefault("rawdata", {"records": []})
+            self.data["tables"]["rawdata"]["records"] = target_records
+            self.data["tables"]["rawdata"]["source"] = f"outbox_stage0:{','.join(map(str, sorted(set(file_ids_used))))}"
+            self._update_metadata("stage0_cache", added_total)
+            print(f"✅ rawdata aus Outbox-Stage0 {'ersetzt' if replace else 'erweitert'} – hinzugefügt: {added_total} Records aus {len(set(file_ids_used))} Files")
+            return added_total
+        except Exception as e:
+            print(f"❌ Fehler beim Outbox-Stage0-Union-Import: {e}")
+            return 0
+
     def _calculate_risk_level(self, churn_probability: float) -> str:
         """Berechnet Risk-Level basierend auf Churn-Wahrscheinlichkeit"""
         if churn_probability >= 0.6:
