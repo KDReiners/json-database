@@ -26,20 +26,35 @@ import json as _json
 
 class ChurnJSONDatabase:
     """
-    Vereinheitlichte JSON-Datenbank für Churn Prediction System
+    Vereinheitlichte JSON-Datenbank für Churn Prediction System (SINGLETON)
+    
+    Singleton-Pattern: Es gibt nur eine Instanz pro Prozess für konsistente Daten.
     """
+    
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls, db_path: str = None):
+        if cls._instance is None:
+            cls._instance = super(ChurnJSONDatabase, cls).__new__(cls)
+        return cls._instance
     
     def __init__(self, db_path: str = None):
         """
-        Initialisiert die JSON-Datenbank
+        Initialisiert die JSON-Datenbank (nur beim ersten Aufruf)
         
         Args:
             db_path: Pfad zur JSON-Datenbank-Datei
         """
+        # Verhindere mehrfache Initialisierung
+        if ChurnJSONDatabase._initialized:
+            return
+            
         if db_path is None:
             db_path = ProjectPaths.dynamic_system_outputs_directory() / "churn_database.json"
         
         self.db_path = Path(db_path)
+        ChurnJSONDatabase._initialized = True
         self.customer_id_field = "Kunde"  # Standardisiertes Feld
         self.data = self._load_or_create()
     
@@ -172,27 +187,27 @@ class ChurnJSONDatabase:
                     },
                     "records": []
                 },
-                "customer_details": {
-                    "description": "Detaillierte Customer-Daten mit verschiedenen Schwellwerten und Predictions",
+                "customer_churn_details": {
+                    "description": "Detaillierte Customer-Churn-Daten mit verschiedenen Schwellwerten und Predictions",
                     "source": "generated",
                     "metadata": {},
                     "schema": {
                         "Kunde": {"display_type": "integer", "description": "Kunden-ID"},
                         "Letzte_Timebase": {"display_type": "integer", "description": "Letzter aktiver Monat"},
-                        "I_ALIVE": {"display_type": "text", "description": "Aktiver Status (True/False)"},
+                        "I_ALIVE": {"display_type": "integer", "description": "Aktiver Status (1=aktiv, 0=churned)"},
                         "Churn_Wahrscheinlichkeit": {"display_type": "decimal", "description": "Churn-Wahrscheinlichkeit"},
                         "Threshold_Standard_0.5": {"display_type": "decimal", "description": "Standard-Schwellwert 0.5"},
-                        "Predicted_Standard_0.5": {"display_type": "text", "description": "Prediction für Standard 0.5"},
+                        "Predicted_Standard_0.5": {"display_type": "integer", "description": "Prediction für Standard 0.5 (1=aktiv, 0=churned)"},
                         "Threshold_Optimal": {"display_type": "decimal", "description": "Optimaler Schwellwert"},
-                        "Predicted_Optimal": {"display_type": "text", "description": "Prediction für Optimal"},
+                        "Predicted_Optimal": {"display_type": "integer", "description": "Prediction für Optimal (1=aktiv, 0=churned)"},
                         "Threshold_Elbow": {"display_type": "decimal", "description": "Elbow-Schwellwert"},
-                        "Predicted_Elbow": {"display_type": "text", "description": "Prediction für Elbow"},
+                        "Predicted_Elbow": {"display_type": "integer", "description": "Prediction für Elbow (1=aktiv, 0=churned)"},
                         "Threshold_F1_Optimal": {"display_type": "decimal", "description": "F1-optimaler Schwellwert"},
-                        "Predicted_F1_Optimal": {"display_type": "text", "description": "Prediction für F1-Optimal"},
+                        "Predicted_F1_Optimal": {"display_type": "integer", "description": "Prediction für F1-Optimal (1=aktiv, 0=churned)"},
                         "Threshold_Precision_First": {"display_type": "decimal", "description": "Precision-First Schwellwert"},
-                        "Predicted_Precision_First": {"display_type": "text", "description": "Prediction für Precision-First"},
+                        "Predicted_Precision_First": {"display_type": "integer", "description": "Prediction für Precision-First (1=aktiv, 0=churned)"},
                         "Threshold_Recall_First": {"display_type": "decimal", "description": "Recall-First Schwellwert"},
-                        "Predicted_Recall_First": {"display_type": "text", "description": "Prediction für Recall-First"},
+                        "Predicted_Recall_First": {"display_type": "integer", "description": "Prediction für Recall-First (1=aktiv, 0=churned)"},
                         "experiment_id": {"display_type": "integer", "description": "Verknüpfung zu Experiment"},
                         "Error": {"display_type": "text", "description": "Fehler-Information (falls vorhanden)"}
                     },
@@ -881,8 +896,17 @@ class ChurnJSONDatabase:
             else:
                 results = []
             
+            # Stelle sicher, dass die Tabelle existiert
+            if "backtest_results" not in self.data.get("tables", {}):
+                self.data.setdefault("tables", {})["backtest_results"] = {
+                    "description": "Zeilenweise Backtest-Ergebnisse je Kunde (pro Experiment)",
+                    "source": "",
+                    "schema": {},
+                    "records": []
+                }
+            
             # Dedupliziere Records basierend auf Kunde + experiment_id
-            existing_records = self.data["tables"]["backtest_results"].get("records", [])
+            existing_records = self.data["tables"].get("backtest_results", {}).get("records", [])
             
             # Entferne alle bestehenden Records für diese experiment_id
             filtered_records = [r for r in existing_records if r.get("id_experiments") != experiment_id]
@@ -1113,17 +1137,17 @@ class ChurnJSONDatabase:
                 print(f"ℹ️ Outbox Stage0-Verzeichnis nicht gefunden: {base_dir}")
                 return 0
 
-            # files-Index: vorhandene Stage0-File-IDs nach file_name auflösen
+            # files-Index: Eingangsdateien (input_data) nach file_name auflösen
             files_tbl = self.data.get("tables", {}).get("files", {}).get("records", []) or []
-            existing_by_name: Dict[str, int] = {}
+            input_by_name: Dict[str, int] = {}
             for rec in files_tbl:
                 try:
-                    if (rec.get("source_type") or "").lower() != "stage0_cache":
+                    if (rec.get("source_type") or "").lower() != "input_data":
                         continue
                     name = rec.get("file_name")
                     if not name:
                         continue
-                    existing_by_name[name] = int(rec.get("id"))
+                    input_by_name[name] = int(rec.get("id"))
                 except Exception:
                     continue
 
@@ -1141,13 +1165,26 @@ class ChurnJSONDatabase:
 
             # Alle Outbox-Stage0-Dateien verarbeiten
             for p in sorted(base_dir.glob("*.json")):
-                name = p.name
-                # File-ID wiederverwenden oder neu anlegen
-                if name in existing_by_name:
-                    fid = existing_by_name[name]
+                # Ursprungs-CSV-Dateinamen aus Stage0-Datei ermitteln
+                try:
+                    import json as _json
+                    import os as _os
+                    with open(p, 'r', encoding='utf-8') as _f:
+                        _stage0_head = _json.load(_f)
+                    _orig_path = _stage0_head.get("file_path") or ""
+                    _orig_name = _os.path.basename(_orig_path) if _orig_path else ""
+                except Exception:
+                    _orig_name = ""
+
+                # Input-File-ID wiederverwenden oder neu anlegen (nur input_data registrieren)
+                if _orig_name and _orig_name in input_by_name:
+                    fid = input_by_name[_orig_name]
                 else:
-                    fid = self.create_file_record(file_name=name, source_type="stage0_cache")
-                    existing_by_name[name] = fid
+                    # Fallback: Wenn keine Zuordnung möglich, registriere einen input_data-Eintrag mit dem ermittelten Namen
+                    # oder – falls unbekannt – mit einem generischen Namen aus der Stage0-Datei
+                    register_name = _orig_name if _orig_name else p.stem
+                    fid = self.create_file_record(file_name=register_name, source_type="input_data")
+                    input_by_name[register_name] = fid
                 try:
                     recs = self._extract_stage0_records(str(p))
                 except Exception:
@@ -1166,8 +1203,9 @@ class ChurnJSONDatabase:
             # Persistieren
             self.data["tables"].setdefault("rawdata", {"records": []})
             self.data["tables"]["rawdata"]["records"] = target_records
-            self.data["tables"]["rawdata"]["source"] = f"outbox_stage0:{','.join(map(str, sorted(set(file_ids_used))))}"
-            self._update_metadata("stage0_cache", added_total)
+            self.data["tables"]["rawdata"]["source"] = f"outbox_stage0_input:{','.join(map(str, sorted(set(file_ids_used))))}"
+            # Metadaten als input_data-Quelle aktualisieren (Stage0 nicht als Quelle zählen)
+            self._update_metadata("input_data", added_total)
             print(f"✅ rawdata aus Outbox-Stage0 {'ersetzt' if replace else 'erweitert'} – hinzugefügt: {added_total} Records aus {len(set(file_ids_used))} Files")
             return added_total
         except Exception as e:
@@ -2231,7 +2269,7 @@ class ChurnJSONDatabase:
         print(f"✅ KPI '{metric_name}' = {metric_value:.4f} für Experiment {experiment_id} hinzugefügt")
         return True
     
-    def add_customer_details_from_backtest(self, backtest_json_path: str, experiment_id: int = None):
+    def add_customer_churn_details_from_backtest(self, backtest_json_path: str, experiment_id: int = None):
         """
         Generiert detaillierte Customer-Daten aus Backtest-JSON und fügt sie zur Datenbank hinzu
         
@@ -2318,7 +2356,6 @@ class ChurnJSONDatabase:
                 # Unterstütze verschiedene Feldnamen
                 churn_prob = prediction_data.get('CHURN_PROBABILITY') or prediction_data.get('churn_probability', 0.0)
                 actual_churn = prediction_data.get('ACTUAL_CHURN') or prediction_data.get('actual_churn', 0)
-                i_alive = 'False' if actual_churn == 1 else 'True'
                 
                 # Bestimme Letzte_Timebase
                 if actual_churn == 1:
@@ -2329,22 +2366,22 @@ class ChurnJSONDatabase:
                 # Erstelle Customer-Detail Record
                 customer_detail = {
                     'Kunde': int(customer_id),
-                    'Letzte_Timebase': last_timebase,
-                    'I_ALIVE': i_alive,
-                    'Churn_Wahrscheinlichkeit': round(churn_prob, 6),
-                    'Threshold_Standard_0.5': round(thresholds['standard_0.5'], 6),
-                    'Predicted_Standard_0.5': 'False' if churn_prob > thresholds['standard_0.5'] else 'True',
-                    'Threshold_Optimal': round(thresholds['optimal'], 6),
-                    'Predicted_Optimal': 'False' if churn_prob > thresholds['optimal'] else 'True',
-                    'Threshold_Elbow': round(thresholds['elbow'], 6),
-                    'Predicted_Elbow': 'False' if churn_prob > thresholds['elbow'] else 'True',
-                    'Threshold_F1_Optimal': round(thresholds['f1_optimal'], 6),
-                    'Predicted_F1_Optimal': 'False' if churn_prob > thresholds['f1_optimal'] else 'True',
-                    'Threshold_Precision_First': round(thresholds['precision_first'], 6),
-                    'Predicted_Precision_First': 'False' if churn_prob > thresholds['precision_first'] else 'True',
-                    'Threshold_Recall_First': round(thresholds['recall_first'], 6),
-                    'Predicted_Recall_First': 'False' if churn_prob > thresholds['recall_first'] else 'True',
-                    'experiment_id': experiment_id,
+                    'Letzte_Timebase': int(last_timebase),
+                    'I_ALIVE': int(0 if actual_churn == 1 else 1),  # Explizit Integer: 0=churned, 1=aktiv
+                    'Churn_Wahrscheinlichkeit': float(round(churn_prob, 6)),
+                    'Threshold_Standard_0.5': float(round(thresholds['standard_0.5'], 6)),
+                    'Predicted_Standard_0.5': int(0 if churn_prob > thresholds['standard_0.5'] else 1),  # Explizit Integer
+                    'Threshold_Optimal': float(round(thresholds['optimal'], 6)),
+                    'Predicted_Optimal': int(0 if churn_prob > thresholds['optimal'] else 1),  # Explizit Integer
+                    'Threshold_Elbow': float(round(thresholds['elbow'], 6)),
+                    'Predicted_Elbow': int(0 if churn_prob > thresholds['elbow'] else 1),  # Explizit Integer
+                    'Threshold_F1_Optimal': float(round(thresholds['f1_optimal'], 6)),
+                    'Predicted_F1_Optimal': int(0 if churn_prob > thresholds['f1_optimal'] else 1),  # Explizit Integer
+                    'Threshold_Precision_First': float(round(thresholds['precision_first'], 6)),
+                    'Predicted_Precision_First': int(0 if churn_prob > thresholds['precision_first'] else 1),  # Explizit Integer
+                    'Threshold_Recall_First': float(round(thresholds['recall_first'], 6)),
+                    'Predicted_Recall_First': int(0 if churn_prob > thresholds['recall_first'] else 1),  # Explizit Integer
+                    'experiment_id': int(experiment_id),
                     'source': 'churn'
                 }
 
@@ -2360,29 +2397,29 @@ class ChurnJSONDatabase:
                 
                 customer_details.append(customer_detail)
             
-            # Stelle sicher, dass die customer_details Tabelle existiert
-            if "customer_details" not in self.data["tables"]:
-                self.data["tables"]["customer_details"] = {
-                    "description": "Detaillierte Customer-Daten mit verschiedenen Schwellwerten und Predictions",
+            # Stelle sicher, dass die customer_churn_details Tabelle existiert
+            if "customer_churn_details" not in self.data["tables"]:
+                self.data["tables"]["customer_churn_details"] = {
+                    "description": "Detaillierte Customer-Churn-Daten mit verschiedenen Schwellwerten und Predictions",
                     "source": "generated",
                     "metadata": {},
                     "schema": {
                         "Kunde": {"display_type": "integer", "description": "Kunden-ID"},
                         "Letzte_Timebase": {"display_type": "integer", "description": "Letzter aktiver Monat"},
-                        "I_ALIVE": {"display_type": "text", "description": "Aktiver Status (True/False)"},
+                        "I_ALIVE": {"display_type": "integer", "description": "Aktiver Status (1=aktiv, 0=churned)"},
                         "Churn_Wahrscheinlichkeit": {"display_type": "decimal", "description": "Churn-Wahrscheinlichkeit"},
                         "Threshold_Standard_0.5": {"display_type": "decimal", "description": "Standard-Schwellwert 0.5"},
-                        "Predicted_Standard_0.5": {"display_type": "text", "description": "Prediction für Standard 0.5"},
+                        "Predicted_Standard_0.5": {"display_type": "integer", "description": "Prediction für Standard 0.5 (1=aktiv, 0=churned)"},
                         "Threshold_Optimal": {"display_type": "decimal", "description": "Optimaler Schwellwert"},
-                        "Predicted_Optimal": {"display_type": "text", "description": "Prediction für Optimal"},
+                        "Predicted_Optimal": {"display_type": "integer", "description": "Prediction für Optimal (1=aktiv, 0=churned)"},
                         "Threshold_Elbow": {"display_type": "decimal", "description": "Elbow-Schwellwert"},
-                        "Predicted_Elbow": {"display_type": "text", "description": "Prediction für Elbow"},
+                        "Predicted_Elbow": {"display_type": "integer", "description": "Prediction für Elbow (1=aktiv, 0=churned)"},
                         "Threshold_F1_Optimal": {"display_type": "decimal", "description": "F1-optimaler Schwellwert"},
-                        "Predicted_F1_Optimal": {"display_type": "text", "description": "Prediction für F1-Optimal"},
+                        "Predicted_F1_Optimal": {"display_type": "integer", "description": "Prediction für F1-Optimal (1=aktiv, 0=churned)"},
                         "Threshold_Precision_First": {"display_type": "decimal", "description": "Precision-First Schwellwert"},
-                        "Predicted_Precision_First": {"display_type": "text", "description": "Prediction für Precision-First"},
+                        "Predicted_Precision_First": {"display_type": "integer", "description": "Prediction für Precision-First (1=aktiv, 0=churned)"},
                         "Threshold_Recall_First": {"display_type": "decimal", "description": "Recall-First Schwellwert"},
-                        "Predicted_Recall_First": {"display_type": "text", "description": "Prediction für Recall-First"},
+                        "Predicted_Recall_First": {"display_type": "integer", "description": "Prediction für Recall-First (1=aktiv, 0=churned)"},
                         "experiment_id": {"display_type": "integer", "description": "Verknüpfung zu Experiment"},
                         "Error": {"display_type": "text", "description": "Fehler-Information (falls vorhanden)"}
                     },
@@ -2390,7 +2427,7 @@ class ChurnJSONDatabase:
                 }
             
             # Füge zur Datenbank hinzu
-            existing_records = self.data["tables"]["customer_details"]["records"]
+            existing_records = self.data["tables"]["customer_churn_details"]["records"]
             
             # Entferne nur frühere Churn-Records dieses Experiments (Cox-Records bleiben)
             if experiment_id:
@@ -2401,10 +2438,10 @@ class ChurnJSONDatabase:
             
             # Füge neue Records hinzu
             existing_records.extend(customer_details)
-            self.data["tables"]["customer_details"]["records"] = existing_records
+            self.data["tables"]["customer_churn_details"]["records"] = existing_records
             
             # Update Metadata
-            self.data["tables"]["customer_details"]["metadata"] = {
+            self.data["tables"]["customer_churn_details"]["metadata"] = {
                 "last_updated": datetime.now().isoformat(),
                 "total_customers": len(customer_details),
                 "source_file": backtest_json_path,
@@ -2414,7 +2451,7 @@ class ChurnJSONDatabase:
             }
             
             print(f"✅ {len(customer_details)} Customer-Details zur Datenbank hinzugefügt")
-            print(f"📊 Churn-Rate: {sum(1 for c in customer_details if c['I_ALIVE'] == 'False') / len(customer_details) * 100:.1f}%")
+            print(f"📊 Churn-Rate: {sum(1 for c in customer_details if c['I_ALIVE'] == 0) / len(customer_details) * 100:.1f}%")
             
             return True
             
@@ -2669,7 +2706,7 @@ class ChurnJSONDatabase:
             cox_results_table['records'] = cox_results_data
             
             # Cox-Customer-Details Tabelle erweitern
-            cox_customer_details_table = self.data['tables']['customer_details']
+            cox_customer_details_table = self.data['tables']['customer_churn_details']
             cox_customer_details_data = cox_customer_details_table.get('records', [])
             
             # Neue Customer-Details hinzufügen
@@ -3022,6 +3059,12 @@ class ChurnJSONDatabase:
             if "is_selected" not in schema:
                 schema["is_selected"] = {"display_type": "integer", "description": "1 wenn gewählte Methode"}
             records = tbl.setdefault("records", [])
+            # Replace-Strategie: Bei neu gewählter Methode (is_selected=1) alte Threshold-Zeilen dieses Experiments entfernen
+            try:
+                if int(is_selected) == 1 and records:
+                    records[:] = [r for r in records if int(r.get("experiment_id", -1)) != int(experiment_id)]
+            except Exception:
+                pass
             # id_files aus dem Experiment übernehmen
             exp_files = []
             for exp in self.data["tables"].get("experiments", {}).get("records", []):
@@ -3086,7 +3129,13 @@ class ChurnJSONDatabase:
                 if metrics.get(key) is not None:
                     rec[key] = metrics.get(key)
 
-            tbl["records"].append(rec)
+            # Replace-Strategie: vorhandene Zeilen für dasselbe Experiment und data_split entfernen
+            try:
+                existing = tbl.setdefault("records", [])
+                existing[:] = [r for r in existing if not (int(r.get("experiment_id", -1)) == int(experiment_id) and str(r.get("data_split")) == str(data_split))]
+                existing.append(rec)
+            except Exception:
+                tbl.setdefault("records", []).append(rec)
             return True
         except Exception as e:
             print(f"❌ Fehler beim Persistieren der churn_model_metrics: {e}")
@@ -3130,7 +3179,13 @@ class ChurnJSONDatabase:
                 if business.get(key) is not None:
                     rec[key] = business.get(key)
 
-            tbl["records"].append(rec)
+            # Replace-Strategie: vorhandene Zeilen für dasselbe Experiment entfernen
+            try:
+                existing = tbl.setdefault("records", [])
+                existing[:] = [r for r in existing if int(r.get("experiment_id", -1)) != int(experiment_id)]
+                existing.append(rec)
+            except Exception:
+                tbl.setdefault("records", []).append(rec)
             return True
         except Exception as e:
             print(f"❌ Fehler beim Persistieren der churn_business_metrics: {e}")

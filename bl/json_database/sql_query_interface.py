@@ -136,6 +136,16 @@ class SQLQueryInterface:
         for table_name, table_data in self.db.data.get("tables", {}).items():
             records = table_data.get("records", []) or []
             df = pd.DataFrame(records)
+            
+            # ✅ BOOLEAN→INTEGER Konvertierung für DuckDB Type-Kompatibilität
+            # DuckDB kann keine Mixed Boolean/Double Spalten verarbeiten
+            for col in df.columns:
+                if df[col].dtype == 'bool':
+                    df[col] = df[col].astype('Int64')  # Pandas nullable integer
+                elif df[col].apply(lambda x: isinstance(x, bool)).any():
+                    # Mixed types: konvertiere Booleans zu Integers
+                    df[col] = df[col].apply(lambda x: int(x) if isinstance(x, bool) else x)
+            
             df = self._cast_dataframe(table_name, df)
             # Falls DataFrame keine Spalten hat, versuche Schema zu verwenden
             if df.shape[1] == 0:
@@ -316,9 +326,9 @@ class SQLQueryInterface:
             base_cte = (
                 "churned_base AS (\n"
                 "  SELECT DISTINCT cd.Kunde\n"
-                "  FROM customer_details cd\n"
+                "  FROM customer_churn_details cd\n"
                 "  JOIN target t ON cd.experiment_id = t.experiment_id\n"
-                "  WHERE cd.I_ALIVE = 'False'\n"
+                  "  WHERE cd.I_ALIVE = 0\n"
                 "),\n"
             )
             base_filter_clause = "  WHERE cd.Kunde IN (SELECT Kunde FROM churned_base)\n"
@@ -347,7 +357,7 @@ probs AS (
     cd.Kunde,
     ce.backtest_to_int AS yyyymm,
     cd.Churn_Wahrscheinlichkeit AS churn_prob
-  FROM customer_details cd
+  FROM customer_churn_details cd
   JOIN candidate_experiments ce ON ce.experiment_id = cd.experiment_id
 {base_filter_clause})
 SELECT
