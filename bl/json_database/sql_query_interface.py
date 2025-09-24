@@ -127,6 +127,11 @@ class SQLQueryInterface:
         Führt eine SQL-Query mit DuckDB gegen die aktuellen JSON-Tabellen aus.
         Registriert alle Tabellen (records -> DataFrame) als Views und führt dann die Query aus.
         """
+        # Stelle sicher, dass die JSON-DB vor jeder Query frisch ist (Auto-Reload)
+        try:
+            self.db.maybe_reload()
+        except Exception:
+            pass
         if not _DUCKDB_AVAILABLE:
             raise RuntimeError("DuckDB nicht verfügbar. Bitte 'pip install duckdb' ausführen.")
         # In-Memory Connection

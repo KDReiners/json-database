@@ -54,9 +54,37 @@ class ChurnJSONDatabase:
             db_path = ProjectPaths.dynamic_system_outputs_directory() / "churn_database.json"
         
         self.db_path = Path(db_path)
+        # Merke zuletzt geladenes mtime (für Auto-Reload über Prozesslebensdauer)
+        try:
+            self._last_loaded_mtime: float = self.db_path.stat().st_mtime
+        except Exception:
+            self._last_loaded_mtime = 0.0
         ChurnJSONDatabase._initialized = True
         self.customer_id_field = "Kunde"  # Standardisiertes Feld
         self.data = self._load_or_create()
+
+    def maybe_reload(self) -> bool:
+        """Lädt die JSON-DB neu, wenn sich die Datei auf Disk geändert hat.
+
+        Returns:
+            True, wenn ein Reload stattfand; sonst False.
+        """
+        try:
+            current_mtime = self.db_path.stat().st_mtime
+        except Exception:
+            current_mtime = 0.0
+        if current_mtime and current_mtime > getattr(self, "_last_loaded_mtime", 0.0):
+            try:
+                import json as _json  # lokale, robuste Re-Importe vermeiden Namenskonflikte
+                with open(self.db_path, 'r', encoding='utf-8') as f:
+                    self.data = _json.load(f)
+                self._last_loaded_mtime = current_mtime
+                print(f"♻️ JSON-DB neu geladen: {self.db_path}")
+                return True
+            except Exception as _e:
+                # Bei Fehlern keinen Reload erzwingen – weiter mit altem Zustand
+                return False
+        return False
     
     def _load_or_create(self) -> Dict[str, Any]:
         """Lädt bestehende Datenbank oder erstellt neue"""
@@ -3002,6 +3030,11 @@ class ChurnJSONDatabase:
 
                 # Atomar ersetzen
                 os.replace(tmp_path, self.db_path)
+                # mtime aktualisieren, damit Auto-Reload andere Prozesse erkennen können
+                try:
+                    self._last_loaded_mtime = self.db_path.stat().st_mtime
+                except Exception:
+                    pass
 
                 print(f"✅ Datenbank sicher gespeichert: {self.db_path}")
                 return True

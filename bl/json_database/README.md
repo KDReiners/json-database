@@ -68,10 +68,10 @@ print(f"Imported rows: {added}")
 
 ## 📊 **CONFIGURATION & SCHEMA**
 
-### **Type System (Data Dictionary ist Quelle der Wahrheit)**
+-### **Type System (Data Dictionary ist Quelle der Wahrheit)**
 - Typregeln (wirksam ab Stage0, keine Laufzeit-Casts erzwungen):
   - `Kunde`: INTEGER
-  - `i_*`: INTEGER, Ausnahme `i_Alive`: BOOLEAN
+  - `i_*`: INTEGER (inkl. `I_Alive` als 1=alive, 0=churned)
   - `I_TIMEBASE`: INTEGER (Format YYYYMM)
   - `n_*`: DOUBLE (float)
 - Datei: `json-database/config/shared/config/data_dictionary_optimized.json`
@@ -313,7 +313,7 @@ recovery_procedure:
 
 ## 🧪 **VALIDATION**
 - Interaktiv: `python bl/json_database/query_churn_database.py`, dann `\tables`, `\describe rawdata`, `\raw_profile`.
-- DuckDB-Checks: `SELECT typeof(Kunde), typeof(I_TIMEBASE), typeof(I_Alive) FROM rawdata LIMIT 1;` (nur Ansicht, keine Datentypänderung).
+- DuckDB-Checks: `SELECT typeof(Kunde), typeof(I_TIMEBASE), typeof(I_Alive) FROM rawdata LIMIT 1;` (nur Ansicht, keine Datentypänderung). Erwartet: `I_Alive` ist INTEGER.
 
 ---
 
