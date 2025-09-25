@@ -2071,18 +2071,14 @@ class ChurnJSONDatabase:
                 "records": []
             }
         
-        # Falls keine Hyperparameter übergeben wurden: Snapshot aus algorithm_config_optimized.json ablegen
+        # Falls keine Hyperparameter übergeben wurden: Pflicht-Snapshot aus algorithm_config_optimized.json
         if not hyperparameters:
-            try:
-                algo_path = ProjectPaths.config_directory() / "algorithm_config_optimized.json"
-                if algo_path.exists():
-                    with open(algo_path, 'r', encoding='utf-8') as f:
-                        algo_cfg = _json.load(f)
-                    hyperparameters = {"algorithm_config": algo_cfg}
-                else:
-                    hyperparameters = {}
-            except Exception:
-                hyperparameters = {}
+            algo_path = ProjectPaths.config_directory() / "algorithm_config_optimized.json"
+            if not algo_path.exists():
+                raise FileNotFoundError(f"algorithm_config_optimized.json nicht gefunden: {algo_path}")
+            with open(algo_path, 'r', encoding='utf-8') as f:
+                algo_cfg = _json.load(f)
+            hyperparameters = {"algorithm_config": algo_cfg}
 
         # Neue Experiment-ID generieren
         existing_ids = [exp["experiment_id"] for exp in self.data["tables"]["experiments"]["records"]]
